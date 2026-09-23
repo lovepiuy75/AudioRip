@@ -8,8 +8,8 @@ import androidx.media3.transformer.Composition
 import androidx.media3.transformer.EditedMediaItem
 import androidx.media3.transformer.EditedMediaItemSequence
 import androidx.media3.transformer.ProgressHolder
-import androidx.media3.transformer.TransformationException
-import androidx.media3.transformer.TransformationResult
+import androidx.media3.transformer.ExportException
+import androidx.media3.transformer.ExportResult
 import androidx.media3.transformer.Transformer
 import kotlinx.coroutines.DelicateCoroutinesApi
 import kotlinx.coroutines.Dispatchers
@@ -56,7 +56,7 @@ object TransformerExtractorEngine {
 
             val transformer = Transformer.Builder(context)
                 .addListener(object : Transformer.Listener {
-                    override fun onCompleted(composition: Composition, exportResult: TransformationResult) {
+                    override fun onCompleted(composition: Composition, exportResult: ExportResult) {
                         isFinished = true
                         onProgress(1.0f)
                         if (continuation.isActive) {
@@ -66,8 +66,8 @@ object TransformerExtractorEngine {
 
                     override fun onError(
                         composition: Composition,
-                        exportResult: TransformationResult,
-                        exception: TransformationException
+                        exportResult: ExportResult,
+                        exception: ExportException
                     ) {
                         isFinished = true
                         if (continuation.isActive) {

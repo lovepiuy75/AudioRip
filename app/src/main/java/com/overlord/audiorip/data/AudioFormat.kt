@@ -12,35 +12,28 @@ enum class OutputAudioFormat(
         extension = "m4a",
         mimeType = "audio/mp4",
         isNativeSupported = true,
-        description = "直接分離無損音軌，2秒極速完成，零品質損耗"
+        description = "直接解流無損音軌，2秒極速完成，零品質損耗"
     ),
-    MP3_192(
-        displayName = "MP3 (通用高音質 192k)",
-        extension = "mp3",
-        mimeType = "audio/mpeg",
-        isNativeSupported = false,
-        description = "廣泛相容各大播放器與舊設備"
-    ),
-    MP3_320(
-        displayName = "MP3 (極致音質 320k)",
-        extension = "mp3",
-        mimeType = "audio/mpeg",
-        isNativeSupported = false,
-        description = "頂級 MP3 位元率，音質細節最豐富"
-    ),
-    WAV(
-        displayName = "WAV (無壓縮 PCM)",
+    WAV_PCM(
+        displayName = "WAV (純淨無壓縮 PCM)",
         extension = "wav",
         mimeType = "audio/wav",
-        isNativeSupported = false,
-        description = "廣播級純淨無壓縮格式，體積較大"
+        isNativeSupported = true,
+        description = "廣播級最高保真格式，原音重現，適合剪輯與收藏"
     ),
-    FLAC(
-        displayName = "FLAC (無損壓縮)",
-        extension = "flac",
-        mimeType = "audio/flac",
+    AAC_TRANSCODE(
+        displayName = "AAC (高保真轉碼 256k)",
+        extension = "m4a",
+        mimeType = "audio/mp4",
+        isNativeSupported = true,
+        description = "Media3 高階音訊處理器，音質細節純淨"
+    ),
+    MP3_COMPAT(
+        displayName = "MP3 (廣泛相容格式)",
+        extension = "mp3",
+        mimeType = "audio/mpeg",
         isNativeSupported = false,
-        description = "發燒友無損壓縮格式，兼顧音質與體積"
+        description = "廣泛相容各大車載音響、播放器與舊設備"
     )
 }
 

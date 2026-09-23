@@ -1,2 +1,2 @@
 # AudioRip Proguard rules
--keep class com.arthenica.ffmpegkit.** { *; }
+-keep class androidx.media3.** { *; }

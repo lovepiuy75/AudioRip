@@ -19,10 +19,7 @@ android {
         vectorDrawables {
             useSupportLibrary = true
         }
-        
-        ndk {
-            abiFilters.addAll(listOf("armeabi-v7a", "arm64-v8a", "x86", "x86_64"))
-        }
+
     }
 
     buildTypes {
@@ -63,16 +60,15 @@ dependencies {
     implementation(libs.androidx.material3)
     implementation(libs.androidx.material.icons.extended)
 
-    // Media3 for Audio preview playback
+    // Jetpack Media3 (Playback & Transcoding)
     implementation(libs.androidx.media3.exoplayer)
     implementation(libs.androidx.media3.common)
+    implementation(libs.androidx.media3.transformer)
+    implementation(libs.androidx.media3.effect)
 
     // Coil for video thumbnail loading
     implementation(libs.coil.compose)
     implementation(libs.coil.video)
-
-    // FFmpeg-kit for audio transcoding
-    implementation(libs.ffmpeg.kit.audio)
 
     // Coroutines
     implementation(libs.kotlinx.coroutines.android)

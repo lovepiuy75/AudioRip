@@ -9,11 +9,12 @@ import androidx.lifecycle.viewModelScope
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
-import com.overlord.audiorip.data.FfmpegExtractorEngine
 import com.overlord.audiorip.data.MediaStoreHelper
 import com.overlord.audiorip.data.NativeExtractorEngine
 import com.overlord.audiorip.data.OutputAudioFormat
+import com.overlord.audiorip.data.TransformerExtractorEngine
 import com.overlord.audiorip.data.VideoMetadata
+import com.overlord.audiorip.data.WavExtractorEngine
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -183,40 +184,59 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 it.copy(extractionState = ExtractionState.Extracting(0f, "準備提取音訊..."))
             }
 
-            val result: Result<File> = if (format == OutputAudioFormat.M4A_NATIVE) {
-                _uiState.update {
-                    it.copy(extractionState = ExtractionState.Extracting(0f, "使用原生極速分離中..."))
-                }
-                NativeExtractorEngine.extractAudio(
-                    context = context,
-                    inputUri = video.uri,
-                    outputFile = tempOutputFile,
-                    startMs = startMs,
-                    endMs = endMs,
-                    onProgress = { p ->
-                        _uiState.update {
-                            it.copy(extractionState = ExtractionState.Extracting(p, "原生極速分離中 ${(p * 100).toInt()}%"))
-                        }
+            val result: Result<File> = when (format) {
+                OutputAudioFormat.M4A_NATIVE -> {
+                    _uiState.update {
+                        it.copy(extractionState = ExtractionState.Extracting(0f, "使用原生極速分離中..."))
                     }
-                )
-            } else {
-                _uiState.update {
-                    it.copy(extractionState = ExtractionState.Extracting(0f, "FFmpeg 轉碼中 (${format.displayName})..."))
-                }
-                FfmpegExtractorEngine.transcodeAudio(
-                    context = context,
-                    inputUri = video.uri,
-                    outputFile = tempOutputFile,
-                    format = format,
-                    startMs = startMs,
-                    endMs = endMs,
-                    totalDurationMs = video.durationMs,
-                    onProgress = { p ->
-                        _uiState.update {
-                            it.copy(extractionState = ExtractionState.Extracting(p, "轉碼進行中 ${(p * 100).toInt()}%"))
+                    NativeExtractorEngine.extractAudio(
+                        context = context,
+                        inputUri = video.uri,
+                        outputFile = tempOutputFile,
+                        startMs = startMs,
+                        endMs = endMs,
+                        onProgress = { p ->
+                            _uiState.update {
+                                it.copy(extractionState = ExtractionState.Extracting(p, "原生極速分離中 ${(p * 100).toInt()}%"))
+                            }
                         }
+                    )
+                }
+                OutputAudioFormat.WAV_PCM -> {
+                    _uiState.update {
+                        it.copy(extractionState = ExtractionState.Extracting(0f, "無壓縮 PCM 提取中..."))
                     }
-                )
+                    WavExtractorEngine.extractWav(
+                        context = context,
+                        inputUri = video.uri,
+                        outputFile = tempOutputFile,
+                        startMs = startMs,
+                        endMs = endMs,
+                        onProgress = { p ->
+                            _uiState.update {
+                                it.copy(extractionState = ExtractionState.Extracting(p, "PCM 提取中 ${(p * 100).toInt()}%"))
+                            }
+                        }
+                    )
+                }
+                OutputAudioFormat.AAC_TRANSCODE, OutputAudioFormat.MP3_COMPAT -> {
+                    _uiState.update {
+                        it.copy(extractionState = ExtractionState.Extracting(0f, "Media3 轉碼中 (${format.displayName})..."))
+                    }
+                    TransformerExtractorEngine.transcodeAudio(
+                        context = context,
+                        inputUri = video.uri,
+                        outputFile = tempOutputFile,
+                        format = format,
+                        startMs = startMs,
+                        endMs = endMs,
+                        onProgress = { p ->
+                            _uiState.update {
+                                it.copy(extractionState = ExtractionState.Extracting(p, "轉碼進行中 ${(p * 100).toInt()}%"))
+                            }
+                        }
+                    )
+                }
             }
 
             result.fold(

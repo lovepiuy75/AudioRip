@@ -15,3 +15,7 @@ app/build/
 .externalNativeBuild
 .cxx
 local.properties
+
+# Generated APK deliverables are backed up to company Drive, not Git.
+/app-debug.apk
+/AudioRip-v1.0.0.apk

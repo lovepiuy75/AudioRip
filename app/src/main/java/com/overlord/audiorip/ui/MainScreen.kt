@@ -4,7 +4,6 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -59,7 +58,7 @@ import com.overlord.audiorip.ui.components.VideoInfoCard
 @Composable
 fun MainScreen(
     viewModel: MainViewModel,
-    onPickVideoClick: () -> Unit,
+    onPickMediaClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val state by viewModel.uiState.collectAsState()
@@ -110,13 +109,13 @@ fun MainScreen(
             val video = state.selectedVideo
 
             if (video == null) {
-                // Empty state: prompt to select video
-                EmptyPickerCard(onPickVideoClick = onPickVideoClick)
+                // Empty state: prompt to select media
+                EmptyPickerCard(onPickMediaClick = onPickMediaClick)
             } else {
-                // Video info card
+                // Media info card (Video or Audio)
                 VideoInfoCard(
                     video = video,
-                    onReselectClick = onPickVideoClick
+                    onReselectClick = onPickMediaClick
                 )
 
                 Spacer(modifier = Modifier.height(16.dp))
@@ -131,14 +130,19 @@ fun MainScreen(
 
                 Spacer(modifier = Modifier.height(16.dp))
 
-                // Trimming Slider
+                // Trimming Slider with audio preview and anchor markers
                 RangeTrimSlider(
                     isEnabled = state.isTrimmingEnabled,
                     onToggle = { viewModel.setTrimmingEnabled(it) },
                     totalDurationMs = video.durationMs,
                     startMs = state.trimStartMs,
                     endMs = state.trimEndMs,
-                    onRangeChange = { start, end -> viewModel.setTrimRange(start, end) }
+                    onRangeChange = { start, end -> viewModel.setTrimRange(start, end) },
+                    isPreviewPlaying = state.isPreviewPlaying,
+                    previewPositionMs = state.previewCurrentPositionMs,
+                    onTogglePreviewPlayback = { viewModel.togglePreviewPlayback() },
+                    onSetStartToCurrent = { viewModel.setStartToCurrentPosition() },
+                    onSetEndToCurrent = { viewModel.setEndToCurrentPosition() }
                 )
 
                 Spacer(modifier = Modifier.height(20.dp))
@@ -212,7 +216,7 @@ fun MainScreen(
                     }
                 }
 
-                // Audio player on Success
+                // Audio player on Success (with Gemini Share, Re-Edit, Delete)
                 AnimatedVisibility(
                     visible = state.extractionState is ExtractionState.Success,
                     enter = fadeIn(),
@@ -228,7 +232,12 @@ fun MainScreen(
                                 currentPositionMs = state.audioCurrentPositionMs,
                                 durationMs = state.audioDurationMs,
                                 onPlayPauseClick = { viewModel.toggleAudioPlayback() },
-                                onSeek = { viewModel.seekAudio(it) }
+                                onSeek = { viewModel.seekAudio(it) },
+                                activityName = state.activityName,
+                                activityTime = state.activityTime,
+                                onActivityNameChange = { viewModel.setActivityName(it) },
+                                onReEditClick = { viewModel.reEditExtractedAudio() },
+                                onDeleteClick = { viewModel.deleteExtractedAudio() }
                             )
                         }
                     }
@@ -242,14 +251,14 @@ fun MainScreen(
 
 @Composable
 private fun EmptyPickerCard(
-    onPickVideoClick: () -> Unit,
+    onPickMediaClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     Card(
         modifier = modifier
             .fillMaxWidth()
             .padding(top = 40.dp)
-            .clickable { onPickVideoClick() },
+            .clickable { onPickMediaClick() },
         shape = RoundedCornerShape(24.dp),
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
@@ -280,7 +289,7 @@ private fun EmptyPickerCard(
             Spacer(modifier = Modifier.height(20.dp))
 
             Text(
-                text = "點擊選取要提取聲音的影片",
+                text = "點擊選取要提取或剪輯的影片/音訊",
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold,
                 textAlign = TextAlign.Center
@@ -289,7 +298,7 @@ private fun EmptyPickerCard(
             Spacer(modifier = Modifier.height(8.dp))
 
             Text(
-                text = "支援 MP4、MKV、MOV、WEBM 等格式\n原生無損極速分離 (M4A) • MP3/WAV/FLAC 轉碼剪輯",
+                text = "支援影片 (MP4, MKV, MOV) 及音訊 (M4A, MP3, WAV, AAC)\n無損極速分離 • 邊聽邊剪 • 一鍵傳送 Gemini 生成逐字稿",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center,
@@ -299,12 +308,12 @@ private fun EmptyPickerCard(
             Spacer(modifier = Modifier.height(24.dp))
 
             Button(
-                onClick = onPickVideoClick,
+                onClick = onPickMediaClick,
                 shape = RoundedCornerShape(12.dp)
             ) {
                 Icon(Icons.Default.VideoLibrary, contentDescription = null, modifier = Modifier.size(18.dp))
                 Spacer(modifier = Modifier.width(8.dp))
-                Text("從相簿或檔案選取影片")
+                Text("選取影片或音訊檔案")
             }
         }
     }

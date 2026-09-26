@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Audiotrack
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.Card
@@ -54,7 +55,7 @@ fun VideoInfoCard(
                 .padding(16.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // Thumbnail
+            // Thumbnail / Audio placeholder
             Box(
                 modifier = Modifier
                     .size(80.dp)
@@ -62,22 +63,31 @@ fun VideoInfoCard(
                     .background(MaterialTheme.colorScheme.surfaceVariant),
                 contentAlignment = Alignment.Center
             ) {
-                AsyncImage(
-                    model = ImageRequest.Builder(LocalContext.current)
-                        .data(video.uri)
-                        .videoFrameMillis(1000)
-                        .crossfade(true)
-                        .build(),
-                    contentDescription = "影片縮圖",
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.matchParentSize()
-                )
-                Icon(
-                    imageVector = Icons.Default.Movie,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f),
-                    modifier = Modifier.size(32.dp)
-                )
+                if (video.isAudioOnly) {
+                    Icon(
+                        imageVector = Icons.Default.Audiotrack,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(36.dp)
+                    )
+                } else {
+                    AsyncImage(
+                        model = ImageRequest.Builder(LocalContext.current)
+                            .data(video.uri)
+                            .videoFrameMillis(1000)
+                            .crossfade(true)
+                            .build(),
+                        contentDescription = "影片縮圖",
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.matchParentSize()
+                    )
+                    Icon(
+                        imageVector = Icons.Default.Movie,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f),
+                        modifier = Modifier.size(32.dp)
+                    )
+                }
             }
 
             Spacer(modifier = Modifier.width(16.dp))
@@ -91,12 +101,13 @@ fun VideoInfoCard(
                     overflow = TextOverflow.Ellipsis
                 )
                 Spacer(modifier = Modifier.height(4.dp))
+                val typeTag = if (video.isAudioOnly) "音訊檔" else "影片檔"
                 Text(
-                    text = "時長: ${formatDuration(video.durationMs)}  •  大小: ${formatFileSize(video.fileSizeBytes)}",
+                    text = "[$typeTag] ${formatDuration(video.durationMs)}  •  ${formatFileSize(video.fileSizeBytes)}",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-                if (video.width > 0 && video.height > 0) {
+                if (!video.isAudioOnly && video.width > 0 && video.height > 0) {
                     Spacer(modifier = Modifier.height(2.dp))
                     Text(
                         text = "解析度: ${video.width} × ${video.height}",
@@ -113,7 +124,7 @@ fun VideoInfoCard(
                 ) {
                     Icon(imageVector = Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
                     Spacer(modifier = Modifier.width(4.dp))
-                    Text(text = "更換影片", style = MaterialTheme.typography.labelMedium)
+                    Text(text = "更換檔案", style = MaterialTheme.typography.labelMedium)
                 }
             }
         }

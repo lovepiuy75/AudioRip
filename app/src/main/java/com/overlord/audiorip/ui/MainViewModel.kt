@@ -24,6 +24,9 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 sealed interface ExtractionState {
     data object Idle : ExtractionState
@@ -39,7 +42,13 @@ data class UiState(
     val trimStartMs: Long = 0L,
     val trimEndMs: Long = 0L,
     val customFileName: String = "",
+    val activityName: String = "",
+    val activityTime: String = "",
     val extractionState: ExtractionState = ExtractionState.Idle,
+    // Preview playback for trimming
+    val isPreviewPlaying: Boolean = false,
+    val previewCurrentPositionMs: Long = 0L,
+    // Result audio playback
     val isAudioPlaying: Boolean = false,
     val audioCurrentPositionMs: Long = 0L,
     val audioDurationMs: Long = 0L
@@ -62,51 +71,91 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         exoPlayer = ExoPlayer.Builder(getApplication()).build().apply {
             addListener(object : Player.Listener {
                 override fun onIsPlayingChanged(isPlaying: Boolean) {
-                    _uiState.update { it.copy(isAudioPlaying = isPlaying) }
+                    val isResultState = _uiState.value.extractionState is ExtractionState.Success
+                    if (isResultState) {
+                        _uiState.update { it.copy(isAudioPlaying = isPlaying) }
+                    } else {
+                        _uiState.update { it.copy(isPreviewPlaying = isPlaying) }
+                    }
                     if (isPlaying) {
-                        startTrackingPlayback()
+                        startTrackingPlayback(isResultState)
                     }
                 }
 
                 override fun onPlaybackStateChanged(playbackState: Int) {
                     if (playbackState == Player.STATE_ENDED) {
-                        _uiState.update { it.copy(isAudioPlaying = false, audioCurrentPositionMs = 0L) }
+                        val isResultState = _uiState.value.extractionState is ExtractionState.Success
+                        if (isResultState) {
+                            _uiState.update { it.copy(isAudioPlaying = false, audioCurrentPositionMs = 0L) }
+                        } else {
+                            _uiState.update { it.copy(isPreviewPlaying = false, previewCurrentPositionMs = 0L) }
+                        }
                     }
                 }
             })
         }
     }
 
-    private fun startTrackingPlayback() {
+    private fun startTrackingPlayback(isResultState: Boolean) {
         playbackProgressJob?.cancel()
         playbackProgressJob = viewModelScope.launch {
             while (isActive && exoPlayer?.isPlaying == true) {
                 val current = exoPlayer?.currentPosition ?: 0L
                 val total = exoPlayer?.duration?.coerceAtLeast(0L) ?: 0L
-                _uiState.update {
-                    it.copy(audioCurrentPositionMs = current, audioDurationMs = total)
+
+                if (isResultState) {
+                    _uiState.update {
+                        it.copy(audioCurrentPositionMs = current, audioDurationMs = total)
+                    }
+                } else {
+                    val state = _uiState.value
+                    // If trimming is enabled and current position exceeds trimEndMs, pause and loop back to startMs
+                    if (state.isTrimmingEnabled && state.trimEndMs > state.trimStartMs && current >= state.trimEndMs) {
+                        exoPlayer?.pause()
+                        exoPlayer?.seekTo(state.trimStartMs)
+                        _uiState.update {
+                            it.copy(isPreviewPlaying = false, previewCurrentPositionMs = state.trimStartMs)
+                        }
+                        break
+                    } else {
+                        _uiState.update {
+                            it.copy(previewCurrentPositionMs = current)
+                        }
+                    }
                 }
-                delay(200)
+                delay(100)
             }
         }
     }
 
-    fun loadVideo(uri: Uri) {
+    fun loadMedia(uri: Uri) {
         viewModelScope.launch {
             stopAudio()
             _uiState.update { it.copy(extractionState = ExtractionState.Idle) }
 
             val context = getApplication<Application>()
-            var fileName = "video"
+            var fileName = "media"
             var fileSize = 0L
 
             // Query file name and size from content resolver
-            context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
-                val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-                val sizeIndex = cursor.getColumnIndex(OpenableColumns.SIZE)
-                if (cursor.moveToFirst()) {
-                    if (nameIndex != -1) fileName = cursor.getString(nameIndex) ?: "video"
-                    if (sizeIndex != -1) fileSize = cursor.getLong(sizeIndex)
+            try {
+                context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+                    val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                    val sizeIndex = cursor.getColumnIndex(OpenableColumns.SIZE)
+                    if (cursor.moveToFirst()) {
+                        if (nameIndex != -1) fileName = cursor.getString(nameIndex) ?: "media"
+                        if (sizeIndex != -1) fileSize = cursor.getLong(sizeIndex)
+                    }
+                }
+            } catch (_: Exception) {
+                // In case of file:// uri fallback
+                val path = uri.path
+                if (path != null) {
+                    val f = File(path)
+                    if (f.exists()) {
+                        fileName = f.name
+                        fileSize = f.length()
+                    }
                 }
             }
 
@@ -114,6 +163,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             var audioMime: String? = null
             var width = 0
             var height = 0
+            var isAudioOnly = false
 
             val retriever = MediaMetadataRetriever()
             try {
@@ -122,6 +172,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 audioMime = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_MIMETYPE)
                 width = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)?.toIntOrNull() ?: 0
                 height = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.toIntOrNull() ?: 0
+                val hasVideo = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_HAS_VIDEO)
+                if (hasVideo == null && (audioMime?.startsWith("audio/") == true || width == 0)) {
+                    isAudioOnly = true
+                }
             } catch (_: Exception) {
             } finally {
                 try { retriever.release() } catch (_: Exception) {}
@@ -135,17 +189,78 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 fileSizeBytes = fileSize,
                 audioMime = audioMime,
                 width = width,
-                height = height
+                height = height,
+                isAudioOnly = isAudioOnly
             )
+
+            val currentTimeStr = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date())
 
             _uiState.update {
                 it.copy(
                     selectedVideo = metadata,
                     customFileName = defaultName,
+                    activityName = defaultName,
+                    activityTime = currentTimeStr,
                     trimStartMs = 0L,
-                    trimEndMs = durationMs
+                    trimEndMs = durationMs,
+                    previewCurrentPositionMs = 0L,
+                    isPreviewPlaying = false
                 )
             }
+
+            // Prepare player for trimming preview
+            try {
+                val mediaItem = MediaItem.fromUri(uri)
+                exoPlayer?.setMediaItem(mediaItem)
+                exoPlayer?.prepare()
+            } catch (_: Exception) {}
+        }
+    }
+
+    // Trimming preview controls
+    fun togglePreviewPlayback() {
+        val player = exoPlayer ?: return
+        val state = _uiState.value
+        if (player.isPlaying) {
+            player.pause()
+        } else {
+            // If trimming is enabled and current position is out of trim range, seek to start
+            if (state.isTrimmingEnabled) {
+                val current = player.currentPosition
+                if (current < state.trimStartMs || (state.trimEndMs > state.trimStartMs && current >= state.trimEndMs)) {
+                    player.seekTo(state.trimStartMs)
+                }
+            }
+            player.play()
+        }
+    }
+
+    fun seekPreview(positionMs: Long) {
+        exoPlayer?.seekTo(positionMs)
+        _uiState.update { it.copy(previewCurrentPositionMs = positionMs) }
+    }
+
+    fun setStartToCurrentPosition() {
+        val current = _uiState.value.previewCurrentPositionMs
+        val safeEnd = _uiState.value.trimEndMs.coerceAtLeast(current)
+        _uiState.update {
+            it.copy(
+                isTrimmingEnabled = true,
+                trimStartMs = current,
+                trimEndMs = safeEnd
+            )
+        }
+    }
+
+    fun setEndToCurrentPosition() {
+        val current = _uiState.value.previewCurrentPositionMs
+        val safeStart = _uiState.value.trimStartMs.coerceAtMost(current)
+        _uiState.update {
+            it.copy(
+                isTrimmingEnabled = true,
+                trimStartMs = safeStart,
+                trimEndMs = current
+            )
         }
     }
 
@@ -165,6 +280,60 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.update { it.copy(customFileName = name) }
     }
 
+    fun setActivityName(name: String) {
+        _uiState.update { it.copy(activityName = name) }
+    }
+
+    fun setActivityTime(time: String) {
+        _uiState.update { it.copy(activityTime = time) }
+    }
+
+    fun getGeminiPrompt(): String {
+        val state = _uiState.value
+        val time = state.activityTime.ifBlank {
+            SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date())
+        }
+        val name = state.activityName.ifBlank { state.customFileName.ifBlank { "會議活動" } }
+        return "請幫我將這段音訊轉成繁體中文逐字稿，並條列出重點摘要與發言重點：\n【活動時間】：$time\n【活動名稱】：$name"
+    }
+
+    // Re-edit previously extracted or current audio file
+    fun reEditExtractedAudio() {
+        val success = _uiState.value.extractionState as? ExtractionState.Success ?: return
+        val fileUri = Uri.fromFile(success.file)
+        loadMedia(fileUri)
+    }
+
+    // Delete extracted audio file
+    fun deleteExtractedAudio(onFinished: (Boolean) -> Unit = {}) {
+        val success = _uiState.value.extractionState as? ExtractionState.Success ?: return
+        viewModelScope.launch {
+            stopAudio()
+            val deleted = MediaStoreHelper.deleteAudio(
+                context = getApplication(),
+                mediaUri = success.mediaUri,
+                localFile = success.file
+            )
+            _uiState.update {
+                it.copy(
+                    extractionState = ExtractionState.Idle,
+                    isAudioPlaying = false,
+                    audioCurrentPositionMs = 0L
+                )
+            }
+            // Also re-load current input media into player
+            val currentMedia = _uiState.value.selectedVideo
+            if (currentMedia != null) {
+                try {
+                    val item = MediaItem.fromUri(currentMedia.uri)
+                    exoPlayer?.setMediaItem(item)
+                    exoPlayer?.prepare()
+                } catch (_: Exception) {}
+            }
+            onFinished(deleted)
+        }
+    }
+
     fun startExtraction() {
         val state = _uiState.value
         val video = state.selectedVideo ?: return
@@ -177,6 +346,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
         val startMs = if (state.isTrimmingEnabled) state.trimStartMs else 0L
         val endMs = if (state.isTrimmingEnabled) state.trimEndMs else 0L
+
+        // Stop preview before extraction
+        stopAudio()
 
         extractionJob?.cancel()
         extractionJob = viewModelScope.launch {
@@ -281,9 +453,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun loadAudioIntoPlayer(file: File) {
-        val mediaItem = MediaItem.fromUri(Uri.fromFile(file))
-        exoPlayer?.setMediaItem(mediaItem)
-        exoPlayer?.prepare()
+        try {
+            val mediaItem = MediaItem.fromUri(Uri.fromFile(file))
+            exoPlayer?.setMediaItem(mediaItem)
+            exoPlayer?.prepare()
+        } catch (_: Exception) {}
     }
 
     fun toggleAudioPlayback() {
@@ -301,7 +475,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun stopAudio() {
         exoPlayer?.stop()
-        _uiState.update { it.copy(isAudioPlaying = false, audioCurrentPositionMs = 0L) }
+        _uiState.update {
+            it.copy(
+                isAudioPlaying = false,
+                audioCurrentPositionMs = 0L,
+                isPreviewPlaying = false,
+                previewCurrentPositionMs = 0L
+            )
+        }
     }
 
     override fun onCleared() {

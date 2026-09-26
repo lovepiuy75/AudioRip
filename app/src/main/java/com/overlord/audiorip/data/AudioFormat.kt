@@ -44,7 +44,8 @@ data class VideoMetadata(
     val fileSizeBytes: Long,
     val audioMime: String?,
     val width: Int,
-    val height: Int
+    val height: Int,
+    val isAudioOnly: Boolean = false
 )
 
 data class ExtractionParams(

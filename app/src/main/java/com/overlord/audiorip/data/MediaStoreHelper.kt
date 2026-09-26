@@ -93,4 +93,45 @@ object MediaStoreHelper {
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
     }
+
+    fun createShareWithPromptIntent(
+        context: Context,
+        audioFile: File,
+        mimeType: String,
+        promptText: String,
+        targetPackage: String? = null
+    ): Intent {
+        val contentUri: Uri = FileProvider.getUriForFile(
+            context,
+            "${context.packageName}.fileprovider",
+            audioFile
+        )
+
+        return Intent(Intent.ACTION_SEND).apply {
+            type = mimeType
+            putExtra(Intent.EXTRA_STREAM, contentUri)
+            putExtra(Intent.EXTRA_TEXT, promptText)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            if (!targetPackage.isNullOrBlank()) {
+                setPackage(targetPackage)
+            }
+        }
+    }
+
+    suspend fun deleteAudio(context: Context, mediaUri: Uri?, localFile: File?): Boolean = withContext(Dispatchers.IO) {
+        var deleted = false
+        try {
+            // Delete local cache file
+            if (localFile != null && localFile.exists()) {
+                deleted = localFile.delete() || deleted
+            }
+            // Delete MediaStore entry
+            if (mediaUri != null) {
+                val rows = context.contentResolver.delete(mediaUri, null, null)
+                if (rows > 0) deleted = true
+            }
+        } catch (_: Exception) {
+        }
+        deleted
+    }
 }

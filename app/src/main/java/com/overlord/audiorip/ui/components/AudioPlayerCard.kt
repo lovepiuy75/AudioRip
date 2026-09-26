@@ -1,6 +1,9 @@
 package com.overlord.audiorip.ui.components
 
 import android.content.Context
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.widget.Toast
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -15,22 +18,34 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Share
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -49,9 +64,15 @@ fun AudioPlayerCard(
     durationMs: Long,
     onPlayPauseClick: () -> Unit,
     onSeek: (Long) -> Unit,
+    activityName: String = "",
+    activityTime: String = "",
+    onActivityNameChange: (String) -> Unit = {},
+    onReEditClick: () -> Unit = {},
+    onDeleteClick: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    var showDeleteConfirmDialog by remember { mutableStateOf(false) }
 
     Card(
         modifier = modifier.fillMaxWidth(),
@@ -77,7 +98,7 @@ fun AudioPlayerCard(
                     modifier = Modifier.size(24.dp)
                 )
                 Spacer(modifier = Modifier.width(8.dp))
-                Column {
+                Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = "音訊提取成功！",
                         style = MaterialTheme.typography.titleMedium,
@@ -121,7 +142,7 @@ fun AudioPlayerCard(
                 }
             }
 
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(14.dp))
 
             // In-app Player Controller
             Row(
@@ -172,24 +193,162 @@ fun AudioPlayerCard(
                 }
             }
 
-            Spacer(modifier = Modifier.height(12.dp))
+            Spacer(modifier = Modifier.height(14.dp))
 
-            // Share button
+            // Activity Info Configuration for Gemini Transcription
+            OutlinedTextField(
+                value = activityName,
+                onValueChange = onActivityNameChange,
+                label = { Text("活動/會議名稱 (用於逐字稿開頭)") },
+                placeholder = { Text("例：產品研發週會 / 演講分享") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(10.dp)
+            )
+
+            Spacer(modifier = Modifier.height(14.dp))
+
+            // Primary Action 1: Send to Gemini directly (Zero API Key)
             Button(
                 onClick = {
                     val mime = getMimeTypeFromFileName(audioFile.name)
-                    val shareIntent = MediaStoreHelper.createShareIntent(context, audioFile, mime)
-                    context.startActivity(android.content.Intent.createChooser(shareIntent, "分享音訊至..."))
+                    val effectiveName = activityName.ifBlank { audioFile.nameWithoutExtension }
+                    val promptText = "請幫我將這段音訊轉成繁體中文逐字稿，並條列出重點摘要與發言重點：\n【活動時間】：$activityTime\n【活動名稱】：$effectiveName"
+
+                    val geminiPackage = "com.google.android.apps.bard"
+                    val isGeminiInstalled = isPackageInstalled(context, geminiPackage)
+
+                    if (isGeminiInstalled) {
+                        try {
+                            val directIntent = MediaStoreHelper.createShareWithPromptIntent(
+                                context = context,
+                                audioFile = audioFile,
+                                mimeType = mime,
+                                promptText = promptText,
+                                targetPackage = geminiPackage
+                            )
+                            context.startActivity(directIntent)
+                        } catch (_: Exception) {
+                            // Fallback to chooser
+                            val fallbackIntent = MediaStoreHelper.createShareWithPromptIntent(
+                                context = context,
+                                audioFile = audioFile,
+                                mimeType = mime,
+                                promptText = promptText
+                            )
+                            context.startActivity(Intent.createChooser(fallbackIntent, "分享音訊與逐字稿指令至..."))
+                        }
+                    } else {
+                        // Launch system chooser with full prompt
+                        val shareIntent = MediaStoreHelper.createShareWithPromptIntent(
+                            context = context,
+                            audioFile = audioFile,
+                            mimeType = mime,
+                            promptText = promptText
+                        )
+                        context.startActivity(Intent.createChooser(shareIntent, "選擇 Gemini 或其他 App 生成逐字稿"))
+                    }
                 },
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(12.dp)
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(48.dp),
+                shape = RoundedCornerShape(12.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.tertiary
+                )
             ) {
-                Icon(imageVector = Icons.Default.Share, contentDescription = null, modifier = Modifier.size(18.dp))
+                Icon(imageVector = Icons.Default.AutoAwesome, contentDescription = null, modifier = Modifier.size(20.dp))
                 Spacer(modifier = Modifier.width(8.dp))
-                Text(text = "分享音訊檔案")
+                Text(text = "傳送給 Gemini 生成逐字稿 (免API)", fontWeight = FontWeight.Bold)
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // Secondary Actions: Re-Edit & Standard Share
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                OutlinedButton(
+                    onClick = onReEditClick,
+                    modifier = Modifier.weight(1f),
+                    shape = RoundedCornerShape(10.dp)
+                ) {
+                    Icon(imageVector = Icons.Default.Edit, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("再微調編輯")
+                }
+
+                OutlinedButton(
+                    onClick = {
+                        val mime = getMimeTypeFromFileName(audioFile.name)
+                        val shareIntent = MediaStoreHelper.createShareIntent(context, audioFile, mime)
+                        context.startActivity(Intent.createChooser(shareIntent, "分享音訊檔案至..."))
+                    },
+                    modifier = Modifier.weight(1f),
+                    shape = RoundedCornerShape(10.dp)
+                ) {
+                    Icon(imageVector = Icons.Default.Share, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("一般分享")
+                }
+            }
+
+            Spacer(modifier = Modifier.height(4.dp))
+
+            // Delete Action
+            TextButton(
+                onClick = { showDeleteConfirmDialog = true },
+                modifier = Modifier.align(Alignment.CenterHorizontally),
+                colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
+            ) {
+                Icon(imageVector = Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(modifier = Modifier.width(4.dp))
+                Text("刪除此檔案", style = MaterialTheme.typography.bodySmall)
             }
         }
     }
+
+    if (showDeleteConfirmDialog) {
+        AlertDialog(
+            onDismissRequest = { showDeleteConfirmDialog = false },
+            title = { Text("確認刪除檔案？") },
+            text = { Text("刪除後將從本地快取與系統 Music/AudioRip 目錄中移除：\n${audioFile.name}") },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showDeleteConfirmDialog = false
+                        onDeleteClick()
+                        Toast.makeText(context, "檔案已刪除", Toast.LENGTH_SHORT).show()
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                ) {
+                    Text("確定刪除")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteConfirmDialog = false }) {
+                    Text("取消")
+                }
+            }
+        )
+    }
+}
+
+private fun isPackageInstalled(context: Context, packageName: String): Boolean {
+    return try {
+        context.packageManager.getPackageInfo(packageName, 0)
+        true
+    } catch (_: PackageManager.NameNotFoundException) {
+        false
+    }
+}
+
+private fun formatDuration(ms: Long): String {
+    val totalSeconds = ms / 1000
+    val minutes = totalSeconds / 60
+    val seconds = totalSeconds % 60
+    return String.format(java.util.Locale.US, "%02d:%02d", minutes, seconds)
 }
 
 fun getMimeTypeFromFileName(fileName: String): String {

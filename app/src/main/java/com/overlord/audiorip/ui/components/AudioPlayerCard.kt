@@ -180,12 +180,12 @@ fun AudioPlayerCard(
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
                         Text(
-                            text = formatDuration(currentPositionMs),
+                            text = formatPlayerDuration(currentPositionMs),
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                         Text(
-                            text = formatDuration(durationMs),
+                            text = formatPlayerDuration(durationMs),
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -344,14 +344,14 @@ private fun isPackageInstalled(context: Context, packageName: String): Boolean {
     }
 }
 
-private fun formatDuration(ms: Long): String {
+private fun formatPlayerDuration(ms: Long): String {
     val totalSeconds = ms / 1000
     val minutes = totalSeconds / 60
     val seconds = totalSeconds % 60
     return String.format(java.util.Locale.US, "%02d:%02d", minutes, seconds)
 }
 
-fun getMimeTypeFromFileName(fileName: String): String {
+private fun getMimeTypeFromFileName(fileName: String): String {
     return when (fileName.substringAfterLast(".").lowercase()) {
         "mp3" -> "audio/mpeg"
         "wav" -> "audio/wav"

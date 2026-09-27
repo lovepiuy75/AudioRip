@@ -111,6 +111,7 @@ object MediaStoreHelper {
             type = mimeType
             putExtra(Intent.EXTRA_STREAM, contentUri)
             putExtra(Intent.EXTRA_TEXT, promptText)
+            clipData = android.content.ClipData.newRawUri("AudioRip_Audio", contentUri)
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             if (!targetPackage.isNullOrBlank()) {
                 setPackage(targetPackage)

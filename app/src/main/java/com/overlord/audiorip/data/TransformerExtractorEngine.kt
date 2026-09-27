@@ -7,9 +7,9 @@ import androidx.media3.common.MediaItem
 import androidx.media3.transformer.Composition
 import androidx.media3.transformer.EditedMediaItem
 import androidx.media3.transformer.EditedMediaItemSequence
-import androidx.media3.transformer.ProgressHolder
 import androidx.media3.transformer.ExportException
 import androidx.media3.transformer.ExportResult
+import androidx.media3.transformer.ProgressHolder
 import androidx.media3.transformer.Transformer
 import kotlinx.coroutines.DelicateCoroutinesApi
 import kotlinx.coroutines.Dispatchers
@@ -33,22 +33,43 @@ object TransformerExtractorEngine {
         startMs: Long = 0L,
         endMs: Long = 0L,
         onProgress: (Float) -> Unit
+    ): Result<File> {
+        val segs = if (startMs > 0L || endMs > 0L) {
+            listOf(TrimSegment(startMs = startMs, endMs = endMs))
+        } else {
+            emptyList()
+        }
+        return transcodeAudioSegments(context, inputUri, outputFile, format, segs, onProgress)
+    }
+
+    suspend fun transcodeAudioSegments(
+        context: Context,
+        inputUri: Uri,
+        outputFile: File,
+        format: OutputAudioFormat,
+        segments: List<TrimSegment>,
+        onProgress: (Float) -> Unit
     ): Result<File> = withContext(Dispatchers.Main) {
-        val clippingConfig = MediaItem.ClippingConfiguration.Builder()
-            .setStartPositionMs(startMs)
-            .setEndPositionMs(if (endMs > 0L) endMs else C.TIME_UNSET)
-            .build()
+        val sequenceItems = if (segments.isEmpty()) {
+            val mediaItem = MediaItem.Builder().setUri(inputUri).build()
+            listOf(EditedMediaItem.Builder(mediaItem).setRemoveVideo(true).build())
+        } else {
+            segments.sortedBy { it.startMs }.map { seg ->
+                val clippingConfig = MediaItem.ClippingConfiguration.Builder()
+                    .setStartPositionMs(seg.startMs)
+                    .setEndPositionMs(if (seg.endMs > 0L) seg.endMs else C.TIME_UNSET)
+                    .build()
+                val mediaItem = MediaItem.Builder()
+                    .setUri(inputUri)
+                    .setClippingConfiguration(clippingConfig)
+                    .build()
+                EditedMediaItem.Builder(mediaItem)
+                    .setRemoveVideo(true)
+                    .build()
+            }
+        }
 
-        val mediaItem = MediaItem.Builder()
-            .setUri(inputUri)
-            .setClippingConfiguration(clippingConfig)
-            .build()
-
-        val editedMediaItem = EditedMediaItem.Builder(mediaItem)
-            .setRemoveVideo(true)
-            .build()
-
-        val sequence = EditedMediaItemSequence(editedMediaItem)
+        val sequence = EditedMediaItemSequence(sequenceItems)
         val composition = Composition.Builder(sequence).build()
 
         suspendCancellableCoroutine { continuation ->
@@ -85,7 +106,7 @@ object TransformerExtractorEngine {
                 transformer.start(composition, outputFile.absolutePath)
 
                 // Start polling progress on background
-                kotlinx.coroutines.GlobalScope.launch(Dispatchers.Main) {
+                GlobalScope.launch(Dispatchers.Main) {
                     val progressHolder = ProgressHolder()
                     while (!isFinished && isActive) {
                         val progressState = transformer.getProgress(progressHolder)

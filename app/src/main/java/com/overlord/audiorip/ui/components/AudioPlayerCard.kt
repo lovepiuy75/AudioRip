@@ -215,38 +215,36 @@ fun AudioPlayerCard(
                     val effectiveName = activityName.ifBlank { audioFile.nameWithoutExtension }
                     val promptText = "請幫我將這段音訊轉成繁體中文逐字稿，並條列出重點摘要與發言重點：\n【活動時間】：$activityTime\n【活動名稱】：$effectiveName"
 
+                    // Auto copy prompt to clipboard as double-safety guarantee
+                    try {
+                        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                        val clip = android.content.ClipData.newPlainText("GeminiPrompt", promptText)
+                        clipboard.setPrimaryClip(clip)
+                        Toast.makeText(context, "已複製逐字稿指令！音訊準備傳送至 Gemini", Toast.LENGTH_SHORT).show()
+                    } catch (_: Exception) {}
+
                     val geminiPackage = "com.google.android.apps.bard"
                     val isGeminiInstalled = isPackageInstalled(context, geminiPackage)
 
-                    if (isGeminiInstalled) {
-                        try {
-                            val directIntent = MediaStoreHelper.createShareWithPromptIntent(
-                                context = context,
-                                audioFile = audioFile,
-                                mimeType = mime,
-                                promptText = promptText,
-                                targetPackage = geminiPackage
-                            )
-                            context.startActivity(directIntent)
-                        } catch (_: Exception) {
-                            // Fallback to chooser
-                            val fallbackIntent = MediaStoreHelper.createShareWithPromptIntent(
-                                context = context,
-                                audioFile = audioFile,
-                                mimeType = mime,
-                                promptText = promptText
-                            )
-                            context.startActivity(Intent.createChooser(fallbackIntent, "分享音訊與逐字稿指令至..."))
-                        }
-                    } else {
-                        // Launch system chooser with full prompt
-                        val shareIntent = MediaStoreHelper.createShareWithPromptIntent(
+                    val shareIntent = MediaStoreHelper.createShareWithPromptIntent(
+                        context = context,
+                        audioFile = audioFile,
+                        mimeType = mime,
+                        promptText = promptText,
+                        targetPackage = if (isGeminiInstalled) geminiPackage else null
+                    )
+
+                    try {
+                        context.startActivity(shareIntent)
+                    } catch (_: Exception) {
+                        // Fallback to system chooser
+                        val fallbackIntent = MediaStoreHelper.createShareWithPromptIntent(
                             context = context,
                             audioFile = audioFile,
                             mimeType = mime,
                             promptText = promptText
                         )
-                        context.startActivity(Intent.createChooser(shareIntent, "選擇 Gemini 或其他 App 生成逐字稿"))
+                        context.startActivity(Intent.createChooser(fallbackIntent, "選擇 Gemini 或其他 App"))
                     }
                 },
                 modifier = Modifier

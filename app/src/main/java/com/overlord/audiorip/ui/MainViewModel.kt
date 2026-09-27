@@ -10,9 +10,11 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import com.overlord.audiorip.data.MediaStoreHelper
+import com.overlord.audiorip.data.MultiCutExportMode
 import com.overlord.audiorip.data.NativeExtractorEngine
 import com.overlord.audiorip.data.OutputAudioFormat
 import com.overlord.audiorip.data.TransformerExtractorEngine
+import com.overlord.audiorip.data.TrimSegment
 import com.overlord.audiorip.data.VideoMetadata
 import com.overlord.audiorip.data.WavExtractorEngine
 import kotlinx.coroutines.Job
@@ -31,7 +33,7 @@ import java.util.Locale
 sealed interface ExtractionState {
     data object Idle : ExtractionState
     data class Extracting(val progress: Float, val statusText: String) : ExtractionState
-    data class Success(val file: File, val mediaUri: Uri) : ExtractionState
+    data class Success(val file: File, val mediaUri: Uri, val extraFiles: List<File> = emptyList()) : ExtractionState
     data class Error(val message: String) : ExtractionState
 }
 
@@ -39,13 +41,14 @@ data class UiState(
     val selectedVideo: VideoMetadata? = null,
     val selectedFormat: OutputAudioFormat = OutputAudioFormat.M4A_NATIVE,
     val isTrimmingEnabled: Boolean = false,
-    val trimStartMs: Long = 0L,
-    val trimEndMs: Long = 0L,
+    val segments: List<TrimSegment> = emptyList(),
+    val activeSegmentIndex: Int = 0,
+    val exportMode: MultiCutExportMode = MultiCutExportMode.MERGE_CONCAT,
     val customFileName: String = "",
     val activityName: String = "",
     val activityTime: String = "",
     val extractionState: ExtractionState = ExtractionState.Idle,
-    // Preview playback for trimming
+    // Timeline Playhead & Preview
     val isPreviewPlaying: Boolean = false,
     val previewCurrentPositionMs: Long = 0L,
     // Result audio playback
@@ -109,12 +112,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     }
                 } else {
                     val state = _uiState.value
-                    // If trimming is enabled and current position exceeds trimEndMs, pause and loop back to startMs
-                    if (state.isTrimmingEnabled && state.trimEndMs > state.trimStartMs && current >= state.trimEndMs) {
+                    val activeSeg = state.segments.getOrNull(state.activeSegmentIndex)
+                    if (state.isTrimmingEnabled && activeSeg != null && activeSeg.endMs > activeSeg.startMs && current >= activeSeg.endMs) {
                         exoPlayer?.pause()
-                        exoPlayer?.seekTo(state.trimStartMs)
+                        exoPlayer?.seekTo(activeSeg.startMs)
                         _uiState.update {
-                            it.copy(isPreviewPlaying = false, previewCurrentPositionMs = state.trimStartMs)
+                            it.copy(isPreviewPlaying = false, previewCurrentPositionMs = activeSeg.startMs)
                         }
                         break
                     } else {
@@ -137,7 +140,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             var fileName = "media"
             var fileSize = 0L
 
-            // Query file name and size from content resolver
             try {
                 context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
                     val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
@@ -148,7 +150,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     }
                 }
             } catch (_: Exception) {
-                // In case of file:// uri fallback
                 val path = uri.path
                 if (path != null) {
                     val f = File(path)
@@ -195,20 +196,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
             val currentTimeStr = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date())
 
+            val initialSegment = TrimSegment(startMs = 0L, endMs = durationMs)
+
             _uiState.update {
                 it.copy(
                     selectedVideo = metadata,
                     customFileName = defaultName,
                     activityName = defaultName,
                     activityTime = currentTimeStr,
-                    trimStartMs = 0L,
-                    trimEndMs = durationMs,
+                    segments = listOf(initialSegment),
+                    activeSegmentIndex = 0,
+                    exportMode = MultiCutExportMode.MERGE_CONCAT,
                     previewCurrentPositionMs = 0L,
                     isPreviewPlaying = false
                 )
             }
 
-            // Prepare player for trimming preview
             try {
                 val mediaItem = MediaItem.fromUri(uri)
                 exoPlayer?.setMediaItem(mediaItem)
@@ -217,63 +220,135 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    // Trimming preview controls
+    // Timeline and Trimming Controls
+    fun setTrimmingEnabled(enabled: Boolean) {
+        _uiState.update { it.copy(isTrimmingEnabled = enabled) }
+    }
+
+    fun setExportMode(mode: MultiCutExportMode) {
+        _uiState.update { it.copy(exportMode = mode) }
+    }
+
+    fun seekPreview(positionMs: Long) {
+        val safePos = positionMs.coerceIn(0L, _uiState.value.selectedVideo?.durationMs ?: 0L)
+        exoPlayer?.seekTo(safePos)
+        _uiState.update { it.copy(previewCurrentPositionMs = safePos) }
+    }
+
     fun togglePreviewPlayback() {
         val player = exoPlayer ?: return
         val state = _uiState.value
         if (player.isPlaying) {
             player.pause()
         } else {
-            // If trimming is enabled and current position is out of trim range, seek to start
-            if (state.isTrimmingEnabled) {
+            val activeSeg = state.segments.getOrNull(state.activeSegmentIndex)
+            if (state.isTrimmingEnabled && activeSeg != null) {
                 val current = player.currentPosition
-                if (current < state.trimStartMs || (state.trimEndMs > state.trimStartMs && current >= state.trimEndMs)) {
-                    player.seekTo(state.trimStartMs)
+                if (current < activeSeg.startMs || (activeSeg.endMs > activeSeg.startMs && current >= activeSeg.endMs)) {
+                    player.seekTo(activeSeg.startMs)
                 }
             }
             player.play()
         }
     }
 
-    fun seekPreview(positionMs: Long) {
-        exoPlayer?.seekTo(positionMs)
-        _uiState.update { it.copy(previewCurrentPositionMs = positionMs) }
-    }
-
     fun setStartToCurrentPosition() {
-        val current = _uiState.value.previewCurrentPositionMs
-        val safeEnd = _uiState.value.trimEndMs.coerceAtLeast(current)
+        val currentMs = _uiState.value.previewCurrentPositionMs
+        val curList = _uiState.value.segments.toMutableList()
+        val index = _uiState.value.activeSegmentIndex.coerceIn(0, (curList.size - 1).coerceAtLeast(0))
+
+        if (curList.isEmpty()) {
+            val total = _uiState.value.selectedVideo?.durationMs ?: 0L
+            curList.add(TrimSegment(startMs = currentMs, endMs = total))
+        } else {
+            val old = curList[index]
+            val safeEnd = if (old.endMs <= currentMs) (_uiState.value.selectedVideo?.durationMs ?: currentMs) else old.endMs
+            curList[index] = old.copy(startMs = currentMs, endMs = safeEnd)
+        }
+
         _uiState.update {
             it.copy(
                 isTrimmingEnabled = true,
-                trimStartMs = current,
-                trimEndMs = safeEnd
+                segments = curList,
+                activeSegmentIndex = index
             )
         }
     }
 
     fun setEndToCurrentPosition() {
-        val current = _uiState.value.previewCurrentPositionMs
-        val safeStart = _uiState.value.trimStartMs.coerceAtMost(current)
+        val currentMs = _uiState.value.previewCurrentPositionMs
+        val curList = _uiState.value.segments.toMutableList()
+        val index = _uiState.value.activeSegmentIndex.coerceIn(0, (curList.size - 1).coerceAtLeast(0))
+
+        if (curList.isEmpty()) {
+            curList.add(TrimSegment(startMs = 0L, endMs = currentMs))
+        } else {
+            val old = curList[index]
+            val safeStart = if (old.startMs >= currentMs) 0L else old.startMs
+            curList[index] = old.copy(startMs = safeStart, endMs = currentMs)
+        }
+
         _uiState.update {
             it.copy(
                 isTrimmingEnabled = true,
-                trimStartMs = safeStart,
-                trimEndMs = current
+                segments = curList,
+                activeSegmentIndex = index
             )
+        }
+    }
+
+    fun addNewSegment() {
+        val state = _uiState.value
+        val totalDuration = state.selectedVideo?.durationMs ?: 0L
+        val currentMs = state.previewCurrentPositionMs
+        val curList = state.segments.toMutableList()
+
+        val defaultSpan = 15_000L // 15 seconds
+        val newStart = currentMs.coerceAtMost((totalDuration - 1000L).coerceAtLeast(0L))
+        val newEnd = (newStart + defaultSpan).coerceAtMost(totalDuration)
+
+        val newSeg = TrimSegment(startMs = newStart, endMs = newEnd)
+        curList.add(newSeg)
+
+        _uiState.update {
+            it.copy(
+                isTrimmingEnabled = true,
+                segments = curList,
+                activeSegmentIndex = curList.size - 1
+            )
+        }
+        seekPreview(newStart)
+    }
+
+    fun removeSegment(index: Int) {
+        val curList = _uiState.value.segments.toMutableList()
+        if (index in curList.indices && curList.size > 1) {
+            curList.removeAt(index)
+            val nextActive = (index - 1).coerceAtLeast(0)
+            _uiState.update {
+                it.copy(segments = curList, activeSegmentIndex = nextActive)
+            }
+        }
+    }
+
+    fun selectSegment(index: Int) {
+        if (index in _uiState.value.segments.indices) {
+            _uiState.update { it.copy(activeSegmentIndex = index) }
+            val seg = _uiState.value.segments[index]
+            seekPreview(seg.startMs)
+        }
+    }
+
+    fun updateSegmentRange(index: Int, startMs: Long, endMs: Long) {
+        val curList = _uiState.value.segments.toMutableList()
+        if (index in curList.indices) {
+            curList[index] = curList[index].copy(startMs = startMs, endMs = endMs)
+            _uiState.update { it.copy(segments = curList) }
         }
     }
 
     fun setFormat(format: OutputAudioFormat) {
         _uiState.update { it.copy(selectedFormat = format) }
-    }
-
-    fun setTrimmingEnabled(enabled: Boolean) {
-        _uiState.update { it.copy(isTrimmingEnabled = enabled) }
-    }
-
-    fun setTrimRange(startMs: Long, endMs: Long) {
-        _uiState.update { it.copy(trimStartMs = startMs, trimEndMs = endMs) }
     }
 
     fun setCustomFileName(name: String) {
@@ -288,23 +363,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.update { it.copy(activityTime = time) }
     }
 
-    fun getGeminiPrompt(): String {
-        val state = _uiState.value
-        val time = state.activityTime.ifBlank {
-            SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date())
-        }
-        val name = state.activityName.ifBlank { state.customFileName.ifBlank { "會議活動" } }
-        return "請幫我將這段音訊轉成繁體中文逐字稿，並條列出重點摘要與發言重點：\n【活動時間】：$time\n【活動名稱】：$name"
-    }
-
-    // Re-edit previously extracted or current audio file
     fun reEditExtractedAudio() {
         val success = _uiState.value.extractionState as? ExtractionState.Success ?: return
         val fileUri = Uri.fromFile(success.file)
         loadMedia(fileUri)
     }
 
-    // Delete extracted audio file
     fun deleteExtractedAudio(onFinished: (Boolean) -> Unit = {}) {
         val success = _uiState.value.extractionState as? ExtractionState.Success ?: return
         viewModelScope.launch {
@@ -314,6 +378,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 mediaUri = success.mediaUri,
                 localFile = success.file
             )
+            success.extraFiles.forEach { f ->
+                try { f.delete() } catch (_: Exception) {}
+            }
+
             _uiState.update {
                 it.copy(
                     extractionState = ExtractionState.Idle,
@@ -321,7 +389,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     audioCurrentPositionMs = 0L
                 )
             }
-            // Also re-load current input media into player
             val currentMedia = _uiState.value.selectedVideo
             if (currentMedia != null) {
                 try {
@@ -341,109 +408,151 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
         val context = getApplication<Application>()
         val outputDir = File(context.cacheDir, "extracted_audio").apply { if (!exists()) mkdirs() }
-        val outputName = "${state.customFileName.ifBlank { "extracted_audio" }}.${format.extension}"
-        val tempOutputFile = File(outputDir, outputName)
+        val baseName = state.customFileName.ifBlank { "extracted_audio" }
 
-        val startMs = if (state.isTrimmingEnabled) state.trimStartMs else 0L
-        val endMs = if (state.isTrimmingEnabled) state.trimEndMs else 0L
+        val effectiveSegments = if (state.isTrimmingEnabled && state.segments.isNotEmpty()) {
+            state.segments.sortedBy { it.startMs }
+        } else {
+            listOf(TrimSegment(startMs = 0L, endMs = video.durationMs))
+        }
 
-        // Stop preview before extraction
         stopAudio()
-
         extractionJob?.cancel()
         extractionJob = viewModelScope.launch {
             _uiState.update {
                 it.copy(extractionState = ExtractionState.Extracting(0f, "準備提取音訊..."))
             }
 
-            val result: Result<File> = when (format) {
-                OutputAudioFormat.M4A_NATIVE -> {
+            // Check if user requested Separate Files vs Concatenation
+            if (state.isTrimmingEnabled && state.exportMode == MultiCutExportMode.SEPARATE_FILES && effectiveSegments.size > 1) {
+                // Separate files mode
+                val extractedFiles = mutableListOf<File>()
+                for ((idx, seg) in effectiveSegments.withIndex()) {
+                    val partName = "${baseName}_part${idx + 1}.${format.extension}"
+                    val partFile = File(outputDir, partName)
                     _uiState.update {
-                        it.copy(extractionState = ExtractionState.Extracting(0f, "使用原生極速分離中..."))
+                        it.copy(extractionState = ExtractionState.Extracting(
+                            idx.toFloat() / effectiveSegments.size,
+                            "正在導出第 ${idx + 1}/${effectiveSegments.size} 段..."
+                        ))
                     }
-                    NativeExtractorEngine.extractAudio(
-                        context = context,
-                        inputUri = video.uri,
-                        outputFile = tempOutputFile,
-                        startMs = startMs,
-                        endMs = endMs,
-                        onProgress = { p ->
-                            _uiState.update {
-                                it.copy(extractionState = ExtractionState.Extracting(p, "原生極速分離中 ${(p * 100).toInt()}%"))
-                            }
-                        }
-                    )
+
+                    val segResult = when (format) {
+                        OutputAudioFormat.M4A_NATIVE -> NativeExtractorEngine.extractAudioSegments(context, video.uri, partFile, listOf(seg)) {}
+                        OutputAudioFormat.WAV_PCM -> WavExtractorEngine.extractWavSegments(context, video.uri, partFile, listOf(seg)) {}
+                        else -> TransformerExtractorEngine.transcodeAudioSegments(context, video.uri, partFile, format, listOf(seg)) {}
+                    }
+
+                    segResult.onSuccess { f ->
+                        extractedFiles.add(f)
+                        MediaStoreHelper.saveAudioToMusicFolder(context, f, partName, format.mimeType)
+                    }
                 }
-                OutputAudioFormat.WAV_PCM -> {
+
+                if (extractedFiles.isNotEmpty()) {
+                    val firstFile = extractedFiles.first()
                     _uiState.update {
-                        it.copy(extractionState = ExtractionState.Extracting(0f, "無壓縮 PCM 提取中..."))
+                        it.copy(extractionState = ExtractionState.Success(
+                            file = firstFile,
+                            mediaUri = Uri.fromFile(firstFile),
+                            extraFiles = extractedFiles.drop(1)
+                        ))
                     }
-                    WavExtractorEngine.extractWav(
-                        context = context,
-                        inputUri = video.uri,
-                        outputFile = tempOutputFile,
-                        startMs = startMs,
-                        endMs = endMs,
-                        onProgress = { p ->
-                            _uiState.update {
-                                it.copy(extractionState = ExtractionState.Extracting(p, "PCM 提取中 ${(p * 100).toInt()}%"))
-                            }
-                        }
-                    )
+                    loadAudioIntoPlayer(firstFile)
+                } else {
+                    _uiState.update { it.copy(extractionState = ExtractionState.Error("多段導出失敗")) }
                 }
-                OutputAudioFormat.AAC_TRANSCODE, OutputAudioFormat.MP3_COMPAT -> {
-                    _uiState.update {
-                        it.copy(extractionState = ExtractionState.Extracting(0f, "Media3 轉碼中 (${format.displayName})..."))
+            } else {
+                // Merge Concat mode (Default)
+                val outputName = "$baseName.${format.extension}"
+                val tempOutputFile = File(outputDir, outputName)
+
+                val result: Result<File> = when (format) {
+                    OutputAudioFormat.M4A_NATIVE -> {
+                        _uiState.update {
+                            it.copy(extractionState = ExtractionState.Extracting(0f, "無損多段極速拼接分離中..."))
+                        }
+                        NativeExtractorEngine.extractAudioSegments(
+                            context = context,
+                            inputUri = video.uri,
+                            outputFile = tempOutputFile,
+                            segments = effectiveSegments,
+                            onProgress = { p ->
+                                _uiState.update {
+                                    it.copy(extractionState = ExtractionState.Extracting(p, "極速拼接處理中 ${(p * 100).toInt()}%"))
+                                }
+                            }
+                        )
                     }
-                    TransformerExtractorEngine.transcodeAudio(
-                        context = context,
-                        inputUri = video.uri,
-                        outputFile = tempOutputFile,
-                        format = format,
-                        startMs = startMs,
-                        endMs = endMs,
-                        onProgress = { p ->
-                            _uiState.update {
-                                it.copy(extractionState = ExtractionState.Extracting(p, "轉碼進行中 ${(p * 100).toInt()}%"))
-                            }
+                    OutputAudioFormat.WAV_PCM -> {
+                        _uiState.update {
+                            it.copy(extractionState = ExtractionState.Extracting(0f, "無壓縮 PCM 多段無縫拼接中..."))
                         }
-                    )
+                        WavExtractorEngine.extractWavSegments(
+                            context = context,
+                            inputUri = video.uri,
+                            outputFile = tempOutputFile,
+                            segments = effectiveSegments,
+                            onProgress = { p ->
+                                _uiState.update {
+                                    it.copy(extractionState = ExtractionState.Extracting(p, "PCM 拼接中 ${(p * 100).toInt()}%"))
+                                }
+                            }
+                        )
+                    }
+                    OutputAudioFormat.AAC_TRANSCODE, OutputAudioFormat.MP3_COMPAT -> {
+                        _uiState.update {
+                            it.copy(extractionState = ExtractionState.Extracting(0f, "Media3 多段拼接轉碼中 (${format.displayName})..."))
+                        }
+                        TransformerExtractorEngine.transcodeAudioSegments(
+                            context = context,
+                            inputUri = video.uri,
+                            outputFile = tempOutputFile,
+                            format = format,
+                            segments = effectiveSegments,
+                            onProgress = { p ->
+                                _uiState.update {
+                                    it.copy(extractionState = ExtractionState.Extracting(p, "轉碼進行中 ${(p * 100).toInt()}%"))
+                                }
+                            }
+                        )
+                    }
                 }
+
+                result.fold(
+                    onSuccess = { extractedFile ->
+                        _uiState.update {
+                            it.copy(extractionState = ExtractionState.Extracting(0.99f, "正在儲存至系統音樂目錄..."))
+                        }
+
+                        val saveResult = MediaStoreHelper.saveAudioToMusicFolder(
+                            context = context,
+                            sourceFile = extractedFile,
+                            displayName = outputName,
+                            mimeType = format.mimeType
+                        )
+
+                        saveResult.fold(
+                            onSuccess = { mediaUri ->
+                                _uiState.update {
+                                    it.copy(extractionState = ExtractionState.Success(extractedFile, mediaUri))
+                                }
+                                loadAudioIntoPlayer(extractedFile)
+                            },
+                            onFailure = { error ->
+                                _uiState.update {
+                                    it.copy(extractionState = ExtractionState.Error("儲存至音樂目錄失敗: ${error.message}"))
+                                }
+                            }
+                        )
+                    },
+                    onFailure = { error ->
+                        _uiState.update {
+                            it.copy(extractionState = ExtractionState.Error("提取失敗: ${error.message}"))
+                        }
+                    }
+                )
             }
-
-            result.fold(
-                onSuccess = { extractedFile ->
-                    _uiState.update {
-                        it.copy(extractionState = ExtractionState.Extracting(0.99f, "正在儲存至系統音樂目錄..."))
-                    }
-
-                    val saveResult = MediaStoreHelper.saveAudioToMusicFolder(
-                        context = context,
-                        sourceFile = extractedFile,
-                        displayName = outputName,
-                        mimeType = format.mimeType
-                    )
-
-                    saveResult.fold(
-                        onSuccess = { mediaUri ->
-                            _uiState.update {
-                                it.copy(extractionState = ExtractionState.Success(extractedFile, mediaUri))
-                            }
-                            loadAudioIntoPlayer(extractedFile)
-                        },
-                        onFailure = { error ->
-                            _uiState.update {
-                                it.copy(extractionState = ExtractionState.Error("儲存至音樂目錄失敗: ${error.message}"))
-                            }
-                        }
-                    )
-                },
-                onFailure = { error ->
-                    _uiState.update {
-                        it.copy(extractionState = ExtractionState.Error("提取失敗: ${error.message}"))
-                    }
-                }
-            )
         }
     }
 

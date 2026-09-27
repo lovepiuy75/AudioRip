@@ -130,19 +130,24 @@ fun MainScreen(
 
                 Spacer(modifier = Modifier.height(16.dp))
 
-                // Trimming Slider with audio preview and anchor markers
+                // Trimming Slider with full-length timeline, playhead, and multi-segment markers
                 RangeTrimSlider(
                     isEnabled = state.isTrimmingEnabled,
                     onToggle = { viewModel.setTrimmingEnabled(it) },
                     totalDurationMs = video.durationMs,
-                    startMs = state.trimStartMs,
-                    endMs = state.trimEndMs,
-                    onRangeChange = { start, end -> viewModel.setTrimRange(start, end) },
-                    isPreviewPlaying = state.isPreviewPlaying,
+                    segments = state.segments,
+                    activeSegmentIndex = state.activeSegmentIndex,
+                    exportMode = state.exportMode,
                     previewPositionMs = state.previewCurrentPositionMs,
+                    isPreviewPlaying = state.isPreviewPlaying,
+                    onSeekPreview = { viewModel.seekPreview(it) },
                     onTogglePreviewPlayback = { viewModel.togglePreviewPlayback() },
                     onSetStartToCurrent = { viewModel.setStartToCurrentPosition() },
-                    onSetEndToCurrent = { viewModel.setEndToCurrentPosition() }
+                    onSetEndToCurrent = { viewModel.setEndToCurrentPosition() },
+                    onAddNewSegment = { viewModel.addNewSegment() },
+                    onRemoveSegment = { viewModel.removeSegment(it) },
+                    onSelectSegment = { viewModel.selectSegment(it) },
+                    onExportModeChange = { viewModel.setExportMode(it) }
                 )
 
                 Spacer(modifier = Modifier.height(20.dp))

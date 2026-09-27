@@ -48,10 +48,21 @@ data class VideoMetadata(
     val isAudioOnly: Boolean = false
 )
 
+data class TrimSegment(
+    val id: String = java.util.UUID.randomUUID().toString(),
+    val startMs: Long,
+    val endMs: Long
+)
+
+enum class MultiCutExportMode(val displayName: String) {
+    MERGE_CONCAT("拼接為單一音檔 (推薦)"),
+    SEPARATE_FILES("各自分離為多個檔案")
+}
+
 data class ExtractionParams(
     val inputUri: android.net.Uri,
     val outputFormat: OutputAudioFormat,
     val customFileName: String,
-    val startMs: Long = 0L,
-    val endMs: Long = 0L // 0 means entire duration
+    val segments: List<TrimSegment> = emptyList(),
+    val exportMode: MultiCutExportMode = MultiCutExportMode.MERGE_CONCAT
 )

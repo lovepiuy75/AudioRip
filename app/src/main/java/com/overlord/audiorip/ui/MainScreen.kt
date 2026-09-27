@@ -21,10 +21,12 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Audiotrack
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.GraphicEq
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.VideoLibrary
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -33,12 +35,14 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -67,6 +71,16 @@ fun MainScreen(
     Scaffold(
         topBar = {
             CenterAlignedTopAppBar(
+                navigationIcon = {
+                    if (state.historyStack.isNotEmpty()) {
+                        IconButton(onClick = { viewModel.popHistorySession() }) {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                                contentDescription = "返回上一層檔案"
+                            )
+                        }
+                    }
+                },
                 title = {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Surface(
@@ -106,6 +120,42 @@ fun MainScreen(
                 .padding(horizontal = 16.dp, vertical = 8.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
+            // Restore Parent Session Banner (if in child re-edit mode)
+            if (state.historyStack.isNotEmpty()) {
+                val parentSession = state.historyStack.last()
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 12.dp)
+                        .clickable { viewModel.popHistorySession() }
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.History, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Column {
+                                Text("正在微調子片段", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
+                                Text(
+                                    "點此返回父檔案: ${parentSession.media.fileName} (保留 ${parentSession.segments.size} 個段落)",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                        TextButton(onClick = { viewModel.popHistorySession() }) {
+                            Text("返回還原")
+                        }
+                    }
+                }
+            }
+
             val video = state.selectedVideo
 
             if (video == null) {
@@ -221,7 +271,7 @@ fun MainScreen(
                     }
                 }
 
-                // Audio player on Success (with Gemini Share, Re-Edit, Delete)
+                // Audio player on Success (with Gemini Share, Re-Edit, Delete & Automated AI Transcription)
                 AnimatedVisibility(
                     visible = state.extractionState is ExtractionState.Success,
                     enter = fadeIn(),
@@ -242,7 +292,13 @@ fun MainScreen(
                                 activityTime = state.activityTime,
                                 onActivityNameChange = { viewModel.setActivityName(it) },
                                 onReEditClick = { viewModel.reEditExtractedAudio() },
-                                onDeleteClick = { viewModel.deleteExtractedAudio() }
+                                onDeleteClick = { viewModel.deleteExtractedAudio() },
+                                isTranscribing = state.isTranscribing,
+                                transcriptionText = state.transcriptionText,
+                                transcriptionError = state.transcriptionError,
+                                geminiApiKey = state.geminiApiKey,
+                                onRequestAiTranscription = { viewModel.requestAiTranscription() },
+                                onSaveApiKey = { viewModel.updateGeminiApiKey(it) }
                             )
                         }
                     }
@@ -303,7 +359,7 @@ private fun EmptyPickerCard(
             Spacer(modifier = Modifier.height(8.dp))
 
             Text(
-                text = "支援影片 (MP4, MKV, MOV) 及音訊 (M4A, MP3, WAV, AAC)\n無損極速分離 • 邊聽邊剪 • 一鍵傳送 Gemini 生成逐字稿",
+                text = "支援影片 (MP4, MKV, MOV) 及音訊 (M4A, MP3, WAV, AAC)\n無損極速分離 • 多段裁切拼接 • 全自動 AI 逐字稿生成",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center,

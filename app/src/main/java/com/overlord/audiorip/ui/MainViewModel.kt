@@ -9,6 +9,7 @@ import androidx.lifecycle.viewModelScope
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
+import com.overlord.audiorip.data.GeminiTranscriptionService
 import com.overlord.audiorip.data.MediaStoreHelper
 import com.overlord.audiorip.data.MultiCutExportMode
 import com.overlord.audiorip.data.NativeExtractorEngine
@@ -37,6 +38,15 @@ sealed interface ExtractionState {
     data class Error(val message: String) : ExtractionState
 }
 
+data class EditSessionSnapshot(
+    val media: VideoMetadata,
+    val segments: List<TrimSegment>,
+    val activeSegmentIndex: Int,
+    val exportMode: MultiCutExportMode,
+    val customFileName: String,
+    val extractionState: ExtractionState
+)
+
 data class UiState(
     val selectedVideo: VideoMetadata? = null,
     val selectedFormat: OutputAudioFormat = OutputAudioFormat.M4A_NATIVE,
@@ -54,7 +64,14 @@ data class UiState(
     // Result audio playback
     val isAudioPlaying: Boolean = false,
     val audioCurrentPositionMs: Long = 0L,
-    val audioDurationMs: Long = 0L
+    val audioDurationMs: Long = 0L,
+    // Edit History / Session Stack
+    val historyStack: List<EditSessionSnapshot> = emptyList(),
+    // Automated AI Transcription State
+    val isTranscribing: Boolean = false,
+    val transcriptionText: String? = null,
+    val transcriptionError: String? = null,
+    val geminiApiKey: String = ""
 )
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
@@ -68,6 +85,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     init {
         initPlayer()
+        loadInitialApiKey()
+    }
+
+    private fun loadInitialApiKey() {
+        val savedKey = GeminiTranscriptionService.getSavedApiKey(getApplication())
+        _uiState.update { it.copy(geminiApiKey = savedKey) }
     }
 
     private fun initPlayer() {
@@ -134,7 +157,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun loadMedia(uri: Uri) {
         viewModelScope.launch {
             stopAudio()
-            _uiState.update { it.copy(extractionState = ExtractionState.Idle) }
+            _uiState.update {
+                it.copy(
+                    extractionState = ExtractionState.Idle,
+                    transcriptionText = null,
+                    transcriptionError = null
+                )
+            }
 
             val context = getApplication<Application>()
             var fileName = "media"
@@ -195,7 +224,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             )
 
             val currentTimeStr = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date())
-
             val initialSegment = TrimSegment(startMs = 0L, endMs = durationMs)
 
             _uiState.update {
@@ -303,7 +331,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val currentMs = state.previewCurrentPositionMs
         val curList = state.segments.toMutableList()
 
-        val defaultSpan = 15_000L // 15 seconds
+        val defaultSpan = 15_000L
         val newStart = currentMs.coerceAtMost((totalDuration - 1000L).coerceAtLeast(0L))
         val newEnd = (newStart + defaultSpan).coerceAtMost(totalDuration)
 
@@ -339,14 +367,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun updateSegmentRange(index: Int, startMs: Long, endMs: Long) {
-        val curList = _uiState.value.segments.toMutableList()
-        if (index in curList.indices) {
-            curList[index] = curList[index].copy(startMs = startMs, endMs = endMs)
-            _uiState.update { it.copy(segments = curList) }
-        }
-    }
-
     fun setFormat(format: OutputAudioFormat) {
         _uiState.update { it.copy(selectedFormat = format) }
     }
@@ -363,10 +383,128 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.update { it.copy(activityTime = time) }
     }
 
+    fun updateGeminiApiKey(key: String) {
+        GeminiTranscriptionService.saveApiKey(getApplication(), key)
+        _uiState.update { it.copy(geminiApiKey = key) }
+    }
+
+    // Session Stack: Push snapshot on re-edit, Pop snapshot on return
     fun reEditExtractedAudio() {
-        val success = _uiState.value.extractionState as? ExtractionState.Success ?: return
+        val state = _uiState.value
+        val success = state.extractionState as? ExtractionState.Success ?: return
+        val currentMedia = state.selectedVideo ?: return
+
+        // Take snapshot of parent workspace before jumping to child re-edit
+        val snapshot = EditSessionSnapshot(
+            media = currentMedia,
+            segments = state.segments,
+            activeSegmentIndex = state.activeSegmentIndex,
+            exportMode = state.exportMode,
+            customFileName = state.customFileName,
+            extractionState = state.extractionState
+        )
+
+        val newStack = state.historyStack + snapshot
+        _uiState.update { it.copy(historyStack = newStack) }
+
         val fileUri = Uri.fromFile(success.file)
         loadMedia(fileUri)
+    }
+
+    fun popHistorySession() {
+        val state = _uiState.value
+        if (state.historyStack.isEmpty()) return
+
+        stopAudio()
+        val snapshot = state.historyStack.last()
+        val remainingStack = state.historyStack.dropLast(1)
+
+        _uiState.update {
+            it.copy(
+                selectedVideo = snapshot.media,
+                segments = snapshot.segments,
+                activeSegmentIndex = snapshot.activeSegmentIndex,
+                exportMode = snapshot.exportMode,
+                customFileName = snapshot.customFileName,
+                extractionState = snapshot.extractionState,
+                historyStack = remainingStack,
+                previewCurrentPositionMs = 0L,
+                isPreviewPlaying = false,
+                transcriptionText = null,
+                transcriptionError = null
+            )
+        }
+
+        // Reload parent media or result into player
+        val resultSuccess = snapshot.extractionState as? ExtractionState.Success
+        if (resultSuccess != null) {
+            loadAudioIntoPlayer(resultSuccess.file)
+        } else {
+            try {
+                val mediaItem = MediaItem.fromUri(snapshot.media.uri)
+                exoPlayer?.setMediaItem(mediaItem)
+                exoPlayer?.prepare()
+            } catch (_: Exception) {}
+        }
+    }
+
+    // Automated Gemini AI Transcription Execution
+    fun requestAiTranscription() {
+        val state = _uiState.value
+        val success = state.extractionState as? ExtractionState.Success ?: return
+        if (state.isTranscribing) return
+
+        val audioFile = success.file
+        val mime = when (audioFile.name.substringAfterLast(".").lowercase()) {
+            "mp3" -> "audio/mpeg"
+            "wav" -> "audio/wav"
+            "flac" -> "audio/flac"
+            "m4a", "aac" -> "audio/mp4"
+            else -> "audio/mp4"
+        }
+
+        val effectiveName = state.activityName.ifBlank { audioFile.nameWithoutExtension }
+        val effectiveTime = state.activityTime.ifBlank {
+            SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date())
+        }
+        val promptText = "請幫我將這段音訊轉成繁體中文逐字稿，並條列出重點摘要與發言重點：\n【活動時間】：$effectiveTime\n【活動名稱】：$effectiveName"
+
+        _uiState.update {
+            it.copy(isTranscribing = true, transcriptionError = null)
+        }
+
+        viewModelScope.launch {
+            val result = GeminiTranscriptionService.transcribeAudio(
+                context = getApplication(),
+                audioFile = audioFile,
+                mimeType = mime,
+                promptText = promptText
+            )
+
+            result.fold(
+                onSuccess = { transcript ->
+                    _uiState.update {
+                        it.copy(
+                            isTranscribing = false,
+                            transcriptionText = transcript,
+                            transcriptionError = null
+                        )
+                    }
+                },
+                onFailure = { error ->
+                    _uiState.update {
+                        it.copy(
+                            isTranscribing = false,
+                            transcriptionError = error.message ?: "轉譯失敗"
+                        )
+                    }
+                }
+            )
+        }
+    }
+
+    fun clearTranscription() {
+        _uiState.update { it.copy(transcriptionText = null, transcriptionError = null) }
     }
 
     fun deleteExtractedAudio(onFinished: (Boolean) -> Unit = {}) {
@@ -386,7 +524,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 it.copy(
                     extractionState = ExtractionState.Idle,
                     isAudioPlaying = false,
-                    audioCurrentPositionMs = 0L
+                    audioCurrentPositionMs = 0L,
+                    transcriptionText = null,
+                    transcriptionError = null
                 )
             }
             val currentMedia = _uiState.value.selectedVideo
@@ -420,12 +560,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         extractionJob?.cancel()
         extractionJob = viewModelScope.launch {
             _uiState.update {
-                it.copy(extractionState = ExtractionState.Extracting(0f, "準備提取音訊..."))
+                it.copy(
+                    extractionState = ExtractionState.Extracting(0f, "準備提取音訊..."),
+                    transcriptionText = null,
+                    transcriptionError = null
+                )
             }
 
-            // Check if user requested Separate Files vs Concatenation
             if (state.isTrimmingEnabled && state.exportMode == MultiCutExportMode.SEPARATE_FILES && effectiveSegments.size > 1) {
-                // Separate files mode
                 val extractedFiles = mutableListOf<File>()
                 for ((idx, seg) in effectiveSegments.withIndex()) {
                     val partName = "${baseName}_part${idx + 1}.${format.extension}"
@@ -463,7 +605,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     _uiState.update { it.copy(extractionState = ExtractionState.Error("多段導出失敗")) }
                 }
             } else {
-                // Merge Concat mode (Default)
                 val outputName = "$baseName.${format.extension}"
                 val tempOutputFile = File(outputDir, outputName)
 

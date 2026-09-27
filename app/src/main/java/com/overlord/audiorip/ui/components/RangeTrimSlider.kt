@@ -195,6 +195,7 @@ fun RangeTrimSlider(
                             }
                         }
                 ) {
+                    val density = androidx.compose.ui.platform.LocalDensity.current
                     val trackWidthPx = constraints.maxWidth.toFloat()
 
                     // Render each highlighted retained segment
@@ -205,6 +206,7 @@ fun RangeTrimSlider(
 
                         val segStartX = (startFraction * trackWidthPx)
                         val segWidth = (segWidthFraction * trackWidthPx)
+                        val segWidthDp = with(density) { segWidth.toDp() }
 
                         val isActive = idx == activeSegmentIndex
                         val segmentBrush = if (isActive) {
@@ -216,7 +218,7 @@ fun RangeTrimSlider(
                         Box(
                             modifier = Modifier
                                 .offset { IntOffset(segStartX.toInt(), 6.dp.roundToPx()) }
-                                .width((segWidth / density).dp)
+                                .width(segWidthDp)
                                 .height(46.dp)
                                 .clip(RoundedCornerShape(8.dp))
                                 .background(segmentBrush)
